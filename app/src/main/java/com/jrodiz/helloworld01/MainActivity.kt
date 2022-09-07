@@ -1,13 +1,19 @@
 package com.jrodiz.helloworld01
 
+import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
 import kotlin.math.abs
@@ -21,11 +27,6 @@ private const val DUMMY = 1
 
 class MainActivity : AppCompatActivity() {
 
-    private val customScope: CoroutineScope
-        get() = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    private var job: Job? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -34,10 +35,9 @@ class MainActivity : AppCompatActivity() {
         val recyclerView: RecyclerView? =
             findViewById<RecyclerViewContainer?>(R.id.recycler_view)?.innerRv
 
-        recyclerView?.setOnScrollChangeListener { _, _, _, _, _ ->
-            startTracking()
+        val provider = MLInterScrollerViewProvider().also {
+            it.initWith(recyclerView!!)
         }
-
         recyclerView?.adapter = CustomAdapter(
             arrayOf(
                 DUMMY,
@@ -50,54 +50,16 @@ class MainActivity : AppCompatActivity() {
                 DUMMY,
                 DUMMY,
                 DUMMY
-            ), scrollEvent
+            ), provider
         )
 
     }
 
-    override fun onStop() {
-        super.onStop()
-        stopTracking()
-    }
-
-    private val scrollEvent = ScrollEvent()
-
-    private fun startTracking() {
-        if (job != null) {
-            return
-        }
-        job = customScope.launch {
-            while (isActive) {
-                delay(10)
-                scrollEvent.onScrolledChanged()
-            }
-        }
-    }
-
-    private fun stopTracking() {
-        job?.cancel()
-        job = null
-        customScope.cancel()
-    }
-
-}
-
-
-class ScrollEvent {
-    interface Observer {
-        fun onScrolledChanged()
-    }
-
-    var listener: Observer? = null
-
-    fun onScrolledChanged() {
-        listener?.onScrolledChanged()
-    }
 }
 
 class CustomAdapter(
     private val dataSet: Array<Int>,
-    private val scrollEvent: ScrollEvent
+    private val provider: MLInterScrollerViewProvider
 ) :
     RecyclerView.Adapter<CustomAdapter.ViewHolder>() {
 
@@ -123,7 +85,7 @@ class CustomAdapter(
         }
     }
 
-    class TransparentBackgroundAd(view: View) : ViewHolder(view) {
+    class TransparentBackgroundAd(view: View) : CustomAdapter.ViewHolder(view) {
         private val webView: ImageView = view.findViewById(R.id.webView)
         private val background: ImageView = view.findViewById(R.id.backgroundView)
 
@@ -133,43 +95,14 @@ class CustomAdapter(
         }
     }
 
-    class TranslateAdView(view: View, scrollEvent: ScrollEvent) : ViewHolder(view) {
-        private val tvHeader: TextView = view.findViewById(R.id.tvHeader)
-        private val webView: ImageView = view.findViewById(R.id.webView)
+    class TranslateAdView(view: View) : CustomAdapter.ViewHolder(view)
 
-        init {
-            scrollEvent.listener = object : ScrollEvent.Observer {
-                val headerLocation = IntArray(2)
-                //val webViewLocation = IntArray(2)
-
-                override fun onScrolledChanged() {
-                    tvHeader.getLocationOnScreen(headerLocation)
-                    //webView.getLocationOnScreen(webViewLocation)
-                    //val hx = headerLocation[0].toFloat()
-                    val hy = headerLocation[1].toFloat()
-                    //val wx = webViewLocation[0].toFloat()
-                    //val wy = webViewLocation[1].toFloat()
-                    webView.post {
-
-                        webView.animate()
-                            .translationY(if (hy > 0) 0f else abs(hy))
-                            .setDuration(0)
-                            .start()
-                    }
-                    //Log.d(TAG, "[$hx, $hy]")
-                }
-            }
-        }
-    }
 
     override fun onCreateViewHolder(viewGroup: ViewGroup, viewType: Int): ViewHolder {
         val inflater = LayoutInflater.from(viewGroup.context)
         return when (viewType) {
             AD_TRANSLATION -> {
-                TranslateAdView(
-                    inflater.inflate(R.layout.ad_row_item, viewGroup, false),
-                    scrollEvent = scrollEvent
-                )
+                TranslateAdView(provider.getView(viewGroup.context, viewGroup))
             }
             AD_BACKGROUND -> {
                 TransparentBackgroundAd(inflater.inflate(R.layout.ad_row_item, viewGroup, false))
@@ -192,5 +125,67 @@ class CustomAdapter(
 
     override fun getItemViewType(position: Int): Int {
         return dataSet[position]
+    }
+}
+
+class MLInterScrollerViewProvider {
+
+    var listener: Observer? = null
+
+    interface Observer {
+        fun updatePosition()
+    }
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val visibilityCheckRunnable = Runnable {
+        Log.v(TAG, "visibilityCheckRunnable")
+        listener?.updatePosition()
+    }
+
+    private val scrollListener = ViewTreeObserver.OnScrollChangedListener {
+        // This will get fired a LOT while the UI is changing. Do not run the visibility check
+        // with each execution of this callback. Instead, wait for the UI to settle down then
+        // call it once.  Hence the short delay.
+        Log.v(TAG, "scrollListener")
+        handler.removeCallbacks(visibilityCheckRunnable)
+        handler.post(visibilityCheckRunnable)
+    }
+
+
+    fun initWith(recyclerView: RecyclerView) {
+        recyclerView.viewTreeObserver?.addOnScrollChangedListener(scrollListener)
+    }
+
+    fun getView(
+        ctx: Context,
+        viewGroup: ViewGroup,
+        attachToRoot: Boolean = false
+    ): View {
+        val view: View = LayoutInflater.from(ctx).inflate(R.layout.ad_row_item, viewGroup, attachToRoot)
+        val tvHeader: TextView = view.findViewById(R.id.tvHeader)
+        val webView: ImageView = view.findViewById(R.id.webView)
+
+        listener = object : Observer {
+            val headerLocation = IntArray(2)
+
+            override fun updatePosition() {
+                tvHeader.getLocationOnScreen(headerLocation)
+                val hy = headerLocation[1]
+                webView.post {
+                    val params = (webView.layoutParams as ConstraintLayout.LayoutParams).apply {
+                        // println("hy = $hy")
+                        if (hy < 0) {
+                            topMargin = abs(hy)
+                            bottomMargin = hy
+                        }
+                    }
+
+                    webView.layoutParams = params
+                }
+            }
+        }
+
+        return view
     }
 }
