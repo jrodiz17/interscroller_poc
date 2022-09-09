@@ -14,6 +14,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.view.ViewCompat.setY
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
 import kotlin.math.abs
@@ -136,20 +137,12 @@ class MLInterScrollerViewProvider {
         fun updatePosition()
     }
 
-    private val handler = Handler(Looper.getMainLooper())
-
-    private val visibilityCheckRunnable = Runnable {
-        Log.v(TAG, "visibilityCheckRunnable")
-        listener?.updatePosition()
-    }
-
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener {
         // This will get fired a LOT while the UI is changing. Do not run the visibility check
         // with each execution of this callback. Instead, wait for the UI to settle down then
         // call it once.  Hence the short delay.
         Log.v(TAG, "scrollListener")
-        handler.removeCallbacks(visibilityCheckRunnable)
-        handler.post(visibilityCheckRunnable)
+        listener?.updatePosition()
     }
 
 
@@ -162,7 +155,8 @@ class MLInterScrollerViewProvider {
         viewGroup: ViewGroup,
         attachToRoot: Boolean = false
     ): View {
-        val view: View = LayoutInflater.from(ctx).inflate(R.layout.ad_row_item, viewGroup, attachToRoot)
+        val view: View =
+            LayoutInflater.from(ctx).inflate(R.layout.ad_row_item, viewGroup, attachToRoot)
         val tvHeader: TextView = view.findViewById(R.id.tvHeader)
         val webView: ImageView = view.findViewById(R.id.webView)
 
@@ -172,9 +166,11 @@ class MLInterScrollerViewProvider {
             override fun updatePosition() {
                 tvHeader.getLocationOnScreen(headerLocation)
                 val hy = headerLocation[1]
-                webView.post {
+                println("hy = $hy")
+
+                val useOption1 = false
+                if (useOption1) {
                     val params = (webView.layoutParams as ConstraintLayout.LayoutParams).apply {
-                        // println("hy = $hy")
                         if (hy < 0) {
                             topMargin = abs(hy)
                             bottomMargin = hy
@@ -182,7 +178,15 @@ class MLInterScrollerViewProvider {
                     }
 
                     webView.layoutParams = params
+                } else {
+                    val tvHeight = tvHeader.height.toFloat()
+                    if (hy < 0) {
+                        webView.y = abs(hy).toFloat() + tvHeight
+                    } else if (webView.y != tvHeight) {
+                        webView.y = tvHeight
+                    }
                 }
+
             }
         }
 
